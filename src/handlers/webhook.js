@@ -18,7 +18,7 @@ class WebhookHandler {
       
       console.log(`📱 From: ${userPhone}, Message: "${message}"`);
       
-      // SIMPLE TEST RESPONSE
+      // SIMPLE TEST RESPONSE - Bypass all logic
       if (message.toLowerCase() === 'ping' || message.toLowerCase() === 'test') {
         return this.sendResponse(res, `✅ RSRVFLOW is working!\n\nReceived from: ${userPhone}\nMessage: "${message}"\n\nTry: "Book a haircut tomorrow at 2pm"`);
       }
@@ -39,19 +39,39 @@ class WebhookHandler {
         return this.sendResponse(res, `🔧 DEBUG INFO:\n${JSON.stringify(debugInfo, null, 2)}`);
       }
       
+      // Handle /setup command directly (no business lookup needed)
+      if (message.toLowerCase().startsWith('/setup')) {
+        return this.handleSetupCommand(userPhone, message, res);
+      }
+      
       // Determine business context
       const business = await this.determineBusiness(userPhone);
       if (!business) {
-        return this.sendResponse(res, 
-          "I couldn't find a business associated with this number.\n\n" +
-          "If you're a BUSINESS OWNER, use:\n/setup BusinessName salon +254700111001\n\n" +
-          "If you're a CUSTOMER, try:\n\"Book a haircut tomorrow at 2pm\""
-        );
+        // If no business exists, guide user to setup
+        if (message.toLowerCase().startsWith('/')) {
+          // It's an admin command but no business
+          return this.sendResponse(res, 
+            "No business found for this number.\n\n" +
+            "To setup a business:\n" +
+            "/setup BusinessName salon +254700111001\n\n" +
+            "Example: /setup MySalon salon +254700111001"
+          );
+        } else {
+          // Customer message but no business exists
+          return this.sendResponse(res, 
+            "🤖 Welcome to RSRVFLOW!\n\n" +
+            "I'm a booking assistant, but no business is configured yet.\n\n" +
+            "If you're a BUSINESS OWNER:\n" +
+            "/setup BusinessName Type Phone\n\n" +
+            "If you're a CUSTOMER:\n" +
+            "Please ask the business owner to setup first."
+          );
+        }
       }
       
       console.log(`🏢 Using business: ${business.name} (${business.business_type})`);
       
-      // Handle admin commands
+      // Handle other admin commands
       if (message.startsWith('/')) {
         return this.handleAdminCommand(userPhone, message, business, res);
       }
@@ -126,25 +146,149 @@ class WebhookHandler {
       // Still respond to user even on error
       return this.sendResponse(res, 
         "I encountered an error processing your request. Please try again in a moment.\n\n" +
-        "For immediate help, please contact the business directly."
+        "Error: " + error.message
       );
     }
   }
 
   async determineBusiness(userPhone) {
-    // First check if user is a business owner
-    const business = await DatabaseService.getBusinessByPhone(userPhone);
-    if (business) {
-      return business;
+    try {
+      console.log(`🔍 Looking up business for phone: ${userPhone}`);
+      
+      // First check if user is a business owner
+      const business = await DatabaseService.getBusinessByPhone(userPhone);
+      if (business) {
+        console.log(`✅ Found business: ${business.name}`);
+        return business;
+      }
+      
+      console.log(`❌ No business found for phone: ${userPhone}`);
+      
+      // For customers: Use first business for now
+      const { data: businesses, error } = await DatabaseService.supabase
+        .from('businesses')
+        .select('*')
+        .limit(1);
+      
+      if (error) {
+        console.error('Error querying businesses:', error);
+        return null;
+      }
+      
+      if (!businesses || businesses.length === 0) {
+        console.log('⚠️ No businesses in database');
+        return null;
+      }
+      
+      console.log(`📋 Using first business: ${businesses[0].name}`);
+      return businesses[0];
+      
+    } catch (error) {
+      console.error('❌ Error in determineBusiness:', error.message);
+      return null;
+    }
+  }
+
+  async handleSetupCommand(userPhone, message, res) {
+    const args = message.slice('/setup'.length).trim();
+    
+    if (!args) {
+      return this.sendResponse(res, 
+        "🏢 Business Setup\n\n" +
+        "Format: /setup BusinessName businessType phone\n\n" +
+        "Example: /setup Nairobi Salon salon +254700111001\n\n" +
+        "Business types: salon, restaurant, dentist, gym, spa, barbershop"
+      );
     }
     
-    // For customers: Use first business for now
-    const { data: businesses } = await DatabaseService.supabase
-      .from('businesses')
-      .select('*')
-      .limit(1);
+    const parts = args.split(' ');
+    if (parts.length < 3) {
+      return this.sendResponse(res, 
+        "❌ Need: BusinessName Type Phone\n\n" +
+        "Example: /setup MySalon salon +254700111001\n\n" +
+        "Note: Separate with spaces"
+      );
+    }
     
-    return businesses?.[0] || null;
+    const name = parts.slice(0, -2).join(' '); // Business name can have spaces
+    const type = parts[parts.length - 2];
+    const phone = parts[parts.length - 1];
+    
+    const validTypes = ['salon', 'restaurant', 'dentist', 'gym', 'spa', 'barbershop', 'clinic'];
+    
+    if (!validTypes.includes(type.toLowerCase())) {
+      return this.sendResponse(res, 
+        `❌ Invalid business type: ${type}\n\n` +
+        `Valid types: ${validTypes.join(', ')}`
+      );
+    }
+    
+    // Validate Kenyan phone
+    if (!phone.startsWith('+254') || phone.length !== 13) {
+      return this.sendResponse(res,
+        `❌ Invalid Kenyan phone: ${phone}\n\n` +
+        `Format: +2547XXXXXXXX (13 digits)\n` +
+        `Example: +254700111001`
+      );
+    }
+    
+    try {
+      // Check if business already exists with this phone
+      const existing = await DatabaseService.getBusinessByPhone(phone);
+      if (existing) {
+        return this.sendResponse(res, 
+          `📋 Business already exists:\n\n` +
+          `Name: ${existing.name}\n` +
+          `Type: ${existing.business_type}\n` +
+          `Phone: ${existing.owner_phone}\n\n` +
+          `Use /status to check your business.`
+        );
+      }
+      
+      // Check if this user already has a business
+      const userBusiness = await DatabaseService.getBusinessByPhone(userPhone);
+      if (userBusiness) {
+        return this.sendResponse(res,
+          `⚠️ You already have a business:\n\n` +
+          `Name: ${userBusiness.name}\n` +
+          `Phone: ${userBusiness.owner_phone}\n\n` +
+          `Use /status to manage it.`
+        );
+      }
+      
+      // Create business
+      const businessData = {
+        name: name,
+        type: type.toLowerCase(),
+        phone: phone,
+        timezone: 'Africa/Nairobi'
+      };
+      
+      console.log(`Creating business:`, businessData);
+      
+      const newBusiness = await DatabaseService.createBusiness(businessData);
+      
+      return this.sendResponse(res, 
+        `✅ Business Created!\n\n` +
+        `📋 Details:\n` +
+        `• Name: ${newBusiness.name}\n` +
+        `• Type: ${newBusiness.business_type}\n` +
+        `• Phone: ${newBusiness.owner_phone}\n` +
+        `• Timezone: ${newBusiness.timezone}\n\n` +
+        `Next steps:\n` +
+        `1. Add services: /add-service Service Duration Price\n` +
+        `   Example: /add-service Haircut 30 800\n\n` +
+        `2. Check status: /status\n\n` +
+        `3. Customers can now book!`
+      );
+      
+    } catch (error) {
+      console.error('Business setup error:', error);
+      return this.sendResponse(res, 
+        `❌ Error creating business:\n\n${error.message}\n\n` +
+        `Please try again or check database setup.`
+      );
+    }
   }
 
   async handleAdminCommand(userPhone, message, business, res) {
@@ -154,78 +298,6 @@ class WebhookHandler {
     console.log(`👑 Admin command: ${command}`, args);
     
     switch (command) {
-      case '/setup':
-        if (!args) {
-          return this.sendResponse(res, 
-            "🏢 Business Setup\n\n" +
-            "Format: /setup BusinessName businessType phone\n\n" +
-            "Example: /setup Nairobi Salon salon +254700111001\n\n" +
-            "Business types: salon, restaurant, dentist, gym, spa"
-          );
-        }
-        
-        const parts = args.split(' ');
-        if (parts.length < 3) {
-          return this.sendResponse(res, 
-            "❌ Need: BusinessName Type Phone\n\n" +
-            "Example: /setup MySalon salon +254700111001"
-          );
-        }
-        
-        const [name, type, phone] = parts;
-        const validTypes = ['salon', 'restaurant', 'dentist', 'gym', 'spa', 'barbershop', 'clinic'];
-        
-        if (!validTypes.includes(type.toLowerCase())) {
-          return this.sendResponse(res, 
-            `❌ Invalid business type: ${type}\n\n` +
-            `Valid types: ${validTypes.join(', ')}`
-          );
-        }
-        
-        try {
-          // Check if business already exists
-          const existing = await DatabaseService.getBusinessByPhone(phone);
-          if (existing) {
-            return this.sendResponse(res, 
-              `Business already exists:\n\n` +
-              `Name: ${existing.name}\n` +
-              `Type: ${existing.business_type}\n` +
-              `Phone: ${existing.owner_phone}\n\n` +
-              `Use /status to check your business.`
-            );
-          }
-          
-          // Create business
-          const businessData = {
-            name: name,
-            type: type.toLowerCase(),
-            phone: phone,
-            timezone: 'Africa/Nairobi'
-          };
-          
-          const newBusiness = await DatabaseService.createBusiness(businessData);
-          
-          return this.sendResponse(res, 
-            `✅ Business Created!\n\n` +
-            `📋 Details:\n` +
-            `• Name: ${newBusiness.name}\n` +
-            `• Type: ${newBusiness.business_type}\n` +
-            `• Phone: ${newBusiness.owner_phone}\n` +
-            `• Timezone: ${newBusiness.timezone}\n\n` +
-            `Next steps:\n` +
-            `1. Add services: /add-service\n` +
-            `2. Set hours: /update-hours\n` +
-            `3. Check status: /status`
-          );
-          
-        } catch (error) {
-          console.error('Business setup error:', error);
-          return this.sendResponse(res, 
-            `❌ Error creating business: ${error.message}\n\n` +
-            `Please try again or contact support.`
-          );
-        }
-        
       case '/status':
         const bookingsCount = await this.getTodayBookingsCount(business.id);
         return this.sendResponse(res,
@@ -254,6 +326,65 @@ class WebhookHandler {
           `📅 Today's Bookings (${todayBookings.length})\n\n${bookingsList}`
         );
         
+      case '/add-service':
+        if (!args) {
+          return this.sendResponse(res,
+            `💇 Add Service\n\n` +
+            `Format: /add-service Name DurationMinutes Price\n\n` +
+            `Example: /add-service Haircut 30 800\n\n` +
+            `Duration in minutes, price in KES`
+          );
+        }
+        
+        const serviceParts = args.split(' ');
+        if (serviceParts.length < 3) {
+          return this.sendResponse(res,
+            `❌ Need: Name Duration Price\n\n` +
+            `Example: /add-service Haircut 30 800`
+          );
+        }
+        
+        const serviceName = serviceParts.slice(0, -2).join(' ');
+        const duration = parseInt(serviceParts[serviceParts.length - 2]);
+        const price = parseInt(serviceParts[serviceParts.length - 1]);
+        
+        if (isNaN(duration) || isNaN(price)) {
+          return this.sendResponse(res,
+            `❌ Invalid numbers\n\n` +
+            `Duration and price must be numbers\n` +
+            `Example: /add-service Haircut 30 800`
+          );
+        }
+        
+        try {
+          const { data: service, error } = await DatabaseService.supabase
+            .from('services')
+            .insert({
+              business_id: business.id,
+              name: serviceName,
+              duration_minutes: duration,
+              price: price,
+              is_active: true
+            })
+            .select()
+            .single();
+          
+          if (error) throw error;
+          
+          return this.sendResponse(res,
+            `✅ Service Added!\n\n` +
+            `• ${service.name}\n` +
+            `• Duration: ${service.duration_minutes} minutes\n` +
+            `• Price: KES ${service.price}\n\n` +
+            `Customers can now book this service!`
+          );
+        } catch (error) {
+          console.error('Add service error:', error);
+          return this.sendResponse(res,
+            `❌ Error adding service: ${error.message}`
+          );
+        }
+        
       case '/help':
         return this.sendResponse(res,
           `🤖 RSRVFLOW Admin Commands\n\n` +
@@ -262,12 +393,11 @@ class WebhookHandler {
           `/status - Business status\n\n` +
           `📅 Operations:\n` +
           `/today - Today's bookings\n` +
-          `/add-service - Add services\n` +
-          `/update-hours - Set business hours\n\n` +
+          `/add-service - Add services\n\n` +
           `⚙️ Configuration:\n` +
-          `/connect-calendar - Connect Google Calendar\n` +
-          `/test-calendar - Test calendar sync\n\n` +
-          `❓ For customers: Just chat naturally!`
+          `/connect-calendar - Connect Google Calendar\n\n` +
+          `❓ For customers: Just chat naturally!\n` +
+          `Example: "Book a haircut tomorrow at 2pm"`
         );
         
       default:
@@ -279,40 +409,60 @@ class WebhookHandler {
   }
 
   async getTodayBookingsCount(businessId) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    
-    const { count, error } = await DatabaseService.supabase
-      .from('bookings')
-      .select('*', { count: 'exact', head: true })
-      .eq('business_id', businessId)
-      .eq('status', 'confirmed')
-      .gte('start_time', today.toISOString())
-      .lt('start_time', tomorrow.toISOString());
-    
-    return error ? 0 : count;
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      const { count, error } = await DatabaseService.supabase
+        .from('bookings')
+        .select('*', { count: 'exact', head: true })
+        .eq('business_id', businessId)
+        .eq('status', 'confirmed')
+        .gte('start_time', today.toISOString())
+        .lt('start_time', tomorrow.toISOString());
+      
+      if (error) {
+        console.error('Error counting bookings:', error);
+        return 0;
+      }
+      
+      return count || 0;
+    } catch (error) {
+      console.error('Error in getTodayBookingsCount:', error);
+      return 0;
+    }
   }
 
   async getTodayBookings(businessId) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    
-    const { data, error } = await DatabaseService.supabase
-      .from('bookings')
-      .select('*')
-      .eq('business_id', businessId)
-      .eq('status', 'confirmed')
-      .gte('start_time', today.toISOString())
-      .lt('start_time', tomorrow.toISOString())
-      .order('start_time', { ascending: true });
-    
-    return error ? [] : data;
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      
+      const { data, error } = await DatabaseService.supabase
+        .from('bookings')
+        .select('*')
+        .eq('business_id', businessId)
+        .eq('status', 'confirmed')
+        .gte('start_time', today.toISOString())
+        .lt('start_time', tomorrow.toISOString())
+        .order('start_time', { ascending: true });
+      
+      if (error) {
+        console.error('Error getting bookings:', error);
+        return [];
+      }
+      
+      return data || [];
+    } catch (error) {
+      console.error('Error in getTodayBookings:', error);
+      return [];
+    }
   }
 
   sendResponse(res, message) {
