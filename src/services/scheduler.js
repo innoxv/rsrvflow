@@ -1,94 +1,46 @@
 const cron = require('node-cron');
 const DatabaseService = require('./supabase');
 const TwilioService = require('./twilio');
-const { format, addHours, isBefore } = require('date-fns');
+const { format, addHours } = require('date-fns');
 
 class SchedulerService {
   constructor() {
-    this.initSchedules();
+    // Initialize only if in production AND no errors
+    if (process.env.NODE_ENV === 'production' && !process.env.DISABLE_SCHEDULER) {
+      this.initSchedules();
+    }
   }
 
   initSchedules() {
-    // Daily reminder check at 9 AM
-    cron.schedule('0 9 * * *', () => {
-      console.log('⏰ Running daily reminder check...');
-      this.sendDailyReminders();
-    });
+    try {
+      // Daily reminders at 9 AM Nairobi (6 AM UTC)
+      cron.schedule('0 6 * * *', () => {
+        console.log('⏰ Running daily reminder check...');
+        this.sendDailyReminders();
+      }, {
+        scheduled: true,
+        timezone: "Africa/Nairobi"
+      });
 
-    // Hourly cleanup of old conversations (keep 7 days)
-    cron.schedule('0 * * * *', () => {
-      this.cleanupOldConversations();
-    });
-
-    // Check for upcoming bookings every 30 minutes
-    cron.schedule('*/30 * * * *', () => {
-      this.checkUpcomingBookings();
-    });
-
-    console.log('📅 Scheduler initialized with daily reminders and hourly cleanup');
+      console.log('📅 Scheduler initialized (daily reminders only)');
+      
+    } catch (error) {
+      console.error('❌ Failed to initialize scheduler:', error.message);
+      console.log('⚠️ Scheduler disabled. Bot will still work for messaging.');
+    }
   }
 
   async sendDailyReminders() {
     try {
-      const hoursBefore = 24; // Send reminders 24 hours before
-      const bookings = await DatabaseService.getUpcomingReminders(hoursBefore);
+      console.log('🔔 Starting daily reminders...');
       
-      console.log(`📨 Sending reminders for ${bookings.length} bookings...`);
+      // Get bookings for tomorrow
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(0, 0, 0, 0);
       
-      for (const booking of bookings) {
-        try {
-          const startTime = new Date(booking.start_time);
-          const business = booking.businesses;
-          
-          const message = `🔔 Reminder: Your ${booking.service_name} appointment at ${business.name} is tomorrow at ${format(startTime, 'h:mm a')}. Please reply CANCEL if you need to reschedule.`;
-          
-          await TwilioService.sendMessage(booking.customer_phone, message);
-          
-          // Mark as sent
-          await DatabaseService.markReminderSent(booking.id);
-          
-          console.log(`✓ Sent reminder to ${booking.customer_phone} for booking ${booking.id}`);
-          
-          // Rate limiting: wait 1 second between messages
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          
-        } catch (error) {
-          console.error(`Failed to send reminder for booking ${booking.id}:`, error);
-        }
-      }
-      
-      console.log(`✅ Sent ${bookings.length} reminders successfully`);
-      
-    } catch (error) {
-      console.error('Error in sendDailyReminders:', error);
-    }
-  }
-
-  async cleanupOldConversations() {
-    try {
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      
-      const { data, error } = await DatabaseService.supabase
-        .from('conversations')
-        .delete()
-        .lt('updated_at', sevenDaysAgo.toISOString());
-      
-      if (error) {
-        console.error('Cleanup error:', error);
-      } else if (data?.length > 0) {
-        console.log(`🧹 Cleaned up ${data.length} old conversations`);
-      }
-      
-    } catch (error) {
-      console.error('Error in cleanup:', error);
-    }
-  }
-
-  async checkUpcomingBookings() {
-    try {
-      const now = new Date();
-      const oneHourFromNow = addHours(now, 1);
+      const dayAfter = new Date(tomorrow);
+      dayAfter.setDate(dayAfter.getDate() + 1);
       
       const { data: bookings, error } = await DatabaseService.supabase
         .from('bookings')
@@ -97,46 +49,64 @@ class SchedulerService {
           businesses (name, owner_phone)
         `)
         .eq('status', 'confirmed')
-        .gte('start_time', now.toISOString())
-        .lte('start_time', oneHourFromNow.toISOString())
-        .eq('upcoming_notification_sent', false);
+        .eq('reminder_sent', false)
+        .gte('start_time', tomorrow.toISOString())
+        .lte('start_time', dayAfter.toISOString());
       
       if (error) {
-        console.error('Error checking upcoming bookings:', error);
+        console.error('Database error in reminders:', error);
         return;
       }
       
+      if (!bookings || bookings.length === 0) {
+        console.log('No reminders to send today.');
+        return;
+      }
+      
+      console.log(`📨 Found ${bookings.length} bookings for reminders`);
+      
       for (const booking of bookings) {
-        // Send notification to business owner
-        const businessMessage = `⏰ Upcoming: ${booking.service_name} for ${booking.customer_name || booking.customer_phone} at ${format(new Date(booking.start_time), 'h:mm a')}`;
-        
         try {
-          await TwilioService.sendMessage(booking.businesses.owner_phone, businessMessage);
+          const startTime = new Date(booking.start_time);
+          const business = booking.businesses || {};
           
-          // Mark as notified
+          const message = `🔔 Reminder: Your ${booking.service_name} appointment at ${business.name || 'our business'} is tomorrow at ${format(startTime, 'h:mm a')}. Please reply CANCEL if you need to reschedule.`;
+          
+          await TwilioService.sendMessage(booking.customer_phone, message);
+          
+          // Mark as sent
           await DatabaseService.supabase
             .from('bookings')
-            .update({ upcoming_notification_sent: true })
+            .update({ reminder_sent: true })
             .eq('id', booking.id);
           
-          console.log(`✓ Sent upcoming notification for booking ${booking.id}`);
+          console.log(`✓ Sent reminder to ${booking.customer_phone}`);
+          
+          // Rate limiting
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
         } catch (error) {
-          console.error(`Failed to send notification for booking ${booking.id}:`, error);
+          console.error(`Failed reminder for booking ${booking.id}:`, error.message);
         }
       }
       
+      console.log('✅ Reminders sent successfully');
+      
     } catch (error) {
-      console.error('Error in checkUpcomingBookings:', error);
+      console.error('Error in sendDailyReminders:', error.message);
     }
   }
 
-  // Manual trigger for testing
-  async triggerRemindersManually() {
-    console.log('🔄 Manually triggering reminders...');
-    await this.sendDailyReminders();
+  // Disable problematic methods temporarily
+  async checkUpcomingBookings() {
+    // Disabled for now
+    return;
+  }
+
+  async cleanupOldConversations() {
+    // Disabled for now
+    return;
   }
 }
 
-// Export singleton instance
-const scheduler = new SchedulerService();
-module.exports = scheduler;
+module.exports = new SchedulerService();

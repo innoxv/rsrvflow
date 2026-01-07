@@ -5,6 +5,13 @@ module.exports = {
   port: process.env.PORT || 3000,
   nodeEnv: process.env.NODE_ENV || 'development',
   timezone: process.env.TIMEZONE || 'Africa/Nairobi',
+
+  // Feature flags
+  features: {
+    disableSignatureCheck: process.env.DISABLE_SIGNATURE_CHECK === 'true',
+    disableScheduler: process.env.DISABLE_SCHEDULER === 'true',
+    enableGoogleCalendar: !!process.env.GOOGLE_CALENDAR_CLIENT_ID
+  },
   
   // Twilio
   twilio: {
