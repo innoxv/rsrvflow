@@ -9,6 +9,7 @@ class BookingAgent {
   }
 
   async processBooking(bookingData, conversation, customerPhone) {
+    console.log('🔍 Processing booking request...', bookingData);
     try {
       console.log('Processing booking with data:', bookingData);
       
