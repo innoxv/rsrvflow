@@ -33,7 +33,7 @@ class DatabaseService {
       .from('businesses')
       .select('*')
       .eq('owner_phone', phone)
-      .single();
+      .maybeSingle();
     
     if (error) {
       console.error('Error getting business by phone:', error);
