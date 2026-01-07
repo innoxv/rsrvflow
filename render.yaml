@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: agentic-booking-bot
+    env: node
+    region: oregon
+    plan: free
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: mixtral-8x7b-32768
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: GOOGLE_CALENDAR_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CALENDAR_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_CALENDAR_REDIRECT_URI
+        generateValue: true
+      - key: TIMEZONE
+        value: Africa/Nairobi
+      - key: LOG_LEVEL
+        value: info
+    buildCommand: npm install
+    startCommand: npm start
+
+crons:
+  - name: send-reminders
+    schedule: "0 9 * * *"
+    command: node src/scripts/send-reminders.js
+    serviceId: agentic-booking-bot
+    plan: free
