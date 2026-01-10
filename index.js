@@ -20,25 +20,67 @@ app.get('/health', (req, res) => {
     status: 'healthy', 
     timestamp: new Date().toISOString(),
     nairobiTime: new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' }),
-    service: 'RSRVFLOW WhatsApp Booking Bot',
+    service: 'rsvflow WhatsApp Booking Bot',
     version: '2.0.1',
     features: ['booking', 'ai-chat', 'kenya-optimized']
   });
 });
 
-// Simple home page
+
+// Home page
 app.get('/', (req, res) => {
   res.send(`
     <html>
-      <head><title>RSRVFLOW Booking Bot</title></head>
-      <body style="font-family: Arial, sans-serif; padding: 20px;">
-        <h1>🤖 RSRVFLOW Booking Bot</h1>
-        <p>✅ Server is running</p>
-        <p>🌍 Timezone: Africa/Nairobi</p>
-        <p>📱 Webhook: <code>POST /webhook</code></p>
-        <p>🔧 Health: <a href="/health">/health</a></p>
-        <hr>
+      <head>
+        <title>Agentic WhatsApp Booking Bot</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+          .header { background: #4F46E5; color: white; padding: 20px; border-radius: 10px; }
+          .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 30px 0; }
+          .feature-card { border: 1px solid #E5E7EB; padding: 20px; border-radius: 8px; }
+          .status { padding: 10px; background: #DCFCE7; border-radius: 5px; margin: 20px 0; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>🤖 Agentic WhatsApp Booking Bot</h1>
+          <p>AI-powered scheduling with Google Calendar integration</p>
+        </div>
+        
+        <div class="status">
+          ✅ Server is running. Webhook endpoint: <code>/webhook</code>
+        </div>
+        
+        <div class="features">
+          <div class="feature-card">
+            <h3>📅 Calendar Integration</h3>
+            <p>Syncs with Google Calendar in real-time</p>
+          </div>
+          <div class="feature-card">
+            <h3>🤖 AI Agent</h3>
+            <p>Natural language understanding for bookings</p>
+          </div>
+          <div class="feature-card">
+            <h3>🏢 Multi-Business</h3>
+            <p>Supports salons, dentists, restaurants, etc.</p>
+          </div>
+          <div class="feature-card">
+            <h3>⏰ Auto Reminders</h3>
+            <p>WhatsApp reminders for appointments</p>
+          </div>
+        </div>
+        
+        <h3>Endpoints:</h3>
+        <ul>
+          <li><code>POST /webhook</code> - Twilio WhatsApp webhook</li>
+          <li><code>POST /admin/setup</code> - Business setup</li>
+          <li><code>GET /calendar/auth/url/:businessId</code> - Calendar OAuth</li>
+          <li><code>GET /calendar/auth/callback</code> - OAuth callback</li>
+          <li><code>GET /health</code> - Health check</li>
+        </ul>
+                <hr>
         <p>Status: ${new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}</p>
+        <p><strong>Deployed on Render</strong> | Version 2.0.1</p>
       </body>
     </html>
   `);
